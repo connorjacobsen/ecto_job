@@ -76,6 +76,13 @@ defmodule EctoJob.JobQueue do
               | {:error, any()}
               | {:error, Ecto.Multi.name(), any(), %{required(Ecto.Multi.name()) => any()}}
 
+  @callback perform_failed(multi :: Multi.t(), params :: map) ::
+              {:ok, any()}
+              | {:error, any()}
+              | {:error, Ecto.Multi.name(), any(), %{required(Ecto.Multi.name()) => any()}}
+
+  @optional_callbacks [perform_failed: 2]
+
   defmacro __using__(opts) do
     table_name = Keyword.fetch!(opts, :table_name)
     schema_prefix = Keyword.get(opts, :schema_prefix)
@@ -449,6 +456,7 @@ defmodule EctoJob.JobQueue do
          job = %{notify: _payload},
          _updates = [state: "FAILED", expires: _]
        ) do
+    handle_failed(repo, job)
     do_notify_failed(repo, job, "failed")
   end
 
@@ -457,5 +465,19 @@ defmodule EctoJob.JobQueue do
     topic = queue.__schema__(:source) <> "." <> event
     repo.query("SELECT pg_notify($1, $2)", [topic, payload])
     :ok
+  end
+
+  @spec handle_failed(repo(), job()) :: :ok
+  defp handle_failed(repo, job = %queue{}) do
+    try do
+      if function_exported?(queue, :perform_failed, 2) do
+        queue.perform_failed(JobQueue.initial_multi(job), job.params)
+      end
+      :ok
+    rescue
+      _ ->
+        # An exception occurred, but since is this failure handler, do nothing.
+        :ok
+    end
   end
 end
